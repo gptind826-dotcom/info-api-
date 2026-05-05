@@ -1,6 +1,7 @@
 import os
 import socket
 import urllib.request
+import re
 from pathlib import Path
 from flask import Flask, jsonify
 from flask_caching import Cache
@@ -46,6 +47,19 @@ except ImportError:
     print("⚠ geoip2 not installed - run: pip install geoip2")
 except Exception as e:
     print(f"⚠ Database load failed: {e}")
+
+def get_telegram_channel_name():
+    """Fetch Telegram channel name from the link"""
+    try:
+        response = requests.get(TELEGRAM_LINK, timeout=5)
+        # Look for the channel name in the HTML
+        match = re.search(r'<meta property="og:title" content="([^"]+)"', response.text)
+        if match:
+            return match.group(1)
+        # Fallback: extract from URL
+        return TELEGRAM_LINK.split('/')[-1]
+    except:
+        return TELEGRAM_LINK.split('/')[-1]
 
 def is_valid_ip(ip_string):
     """Check if string is a valid IP address"""
@@ -124,7 +138,7 @@ def check_missing_fields(data):
     missing = []
     
     for field in required_fields:
-        if not data.get(field):  # Empty string or None
+        if not data.get(field):
             missing.append(field)
     
     return missing
@@ -147,14 +161,13 @@ def ip_info(query):
                 "telegram": TELEGRAM_LINK
             }), 404
         ip = resolved_ip
-        hostname = query  # Domain name as hostname
+        hostname = query
     
     # Step 1: Try to get data from database
     db_data = get_from_database(ip)
     
     # Step 2: Prepare initial response
     if db_data:
-        # Database has some data
         result = {
             "ip": ip,
             "hostname": hostname,
@@ -162,45 +175,34 @@ def ip_info(query):
             "region": db_data.get('region', ''),
             "country": db_data.get('country', ''),
             "loc": db_data.get('loc', ''),
-            "org": "",  # Will be filled from API
+            "org": "",
             "postal": db_data.get('postal', ''),
             "timezone": db_data.get('timezone', ''),
             "telegram": TELEGRAM_LINK,
             "anycast": get_anycast(ip)
         }
         
-        # Step 3: Check for missing fields
         missing_fields = check_missing_fields(result)
         
         if missing_fields:
             print(f"⚠ Missing fields for {ip}: {missing_fields}")
-            print(f"🔄 Fetching from API to fill missing data...")
-            
-            # Step 4: Get data from API to fill missing fields
             api_data = get_from_api(ip)
             
             if api_data:
-                # Fill only the missing fields
                 for field in missing_fields:
                     if field in api_data and api_data[field]:
                         result[field] = api_data[field]
-                        print(f"✓ Filled {field}: {api_data[field]}")
                 
-                # Always get organization from API (database doesn't have it)
                 if api_data.get('org'):
                     result['org'] = api_data['org']
-                    print(f"✓ Filled org: {api_data['org']}")
         else:
-            print(f"✓ Database has complete data for {ip}")
-            # Still need org from API
             api_data = get_from_api(ip)
             if api_data and api_data.get('org'):
                 result['org'] = api_data['org']
         
         return jsonify(result)
     
-    # Step 5: Database has NO data at all - use API completely
-    print(f"⚠ No database data for {ip}, using API only")
+    # Step 3: Database has NO data - use API
     api_data = get_from_api(ip)
     
     if api_data:
@@ -219,7 +221,7 @@ def ip_info(query):
         }
         return jsonify(result)
     
-    # Step 6: Everything failed
+    # Step 4: Everything failed
     return jsonify({
         "ip": ip,
         "hostname": hostname,
@@ -236,6 +238,7 @@ def ip_info(query):
 
 @app.route('/health')
 def health_check():
+    """Health check endpoint"""
     return jsonify({
         "status": "healthy",
         "database_loaded": reader is not None,
@@ -245,17 +248,30 @@ def health_check():
 
 @app.route('/')
 def home():
+    """Clean homepage - shows how to use the API only"""
+    # Get Telegram channel name
+    channel_name = get_telegram_channel_name()
+    
+    # Get base URL from request
+    base_url = request.base_url.rstrip('/')
+    
     return jsonify({
         "name": "IP Geolocation API",
         "version": "4.0",
-        "features": [
-            "Database first (fast)",
-            "Auto-detects missing fields",
-            "Fills missing data from API",
-            "Works with IPs and domains"
-        ],
-        "example": "http://localhost:8080/8.8.8.8/json",
-        "telegram": TELEGRAM_LINK
+        "endpoints": {
+            "IP_address": f"{base_url}/8.8.8.8/json",
+            "Domain_name": f"{base_url}/google.com/json",
+            "Health_check": f"{base_url}/health"
+        },
+        "usage": {
+            "method": "GET",
+            "example_ip": f"{base_url}/8.8.8.8/json",
+            "example_domain": f"{base_url}/github.com/json"
+        },
+        "credit": {
+            "owner": channel_name,
+            "telegram": TELEGRAM_LINK
+        }
     })
 
 if __name__ == '__main__':
@@ -264,10 +280,7 @@ if __name__ == '__main__':
     print("="*60)
     print(f"📱 Telegram: {TELEGRAM_LINK}")
     print(f"💾 Database: {DATABASE_FILE}")
-    print(f"🔄 Strategy: Database → Check missing → API fill")
     print(f"🌐 Server: http://localhost:8080")
-    print(f"🔍 Test IP: http://localhost:8080/8.8.8.8/json")
-    print(f"🔍 Test Domain: http://localhost:8080/google.com/json")
     print("="*60 + "\n")
     
     app.run(host='0.0.0.0', port=8080, debug=False)
