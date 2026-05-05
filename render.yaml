@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: ip-geo-api
+    runtime: python
+    repo: https://github.com/YOUR_USERNAME/YOUR_REPO_NAME
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: PORT
+        value: 8080
+    healthCheckPath: /health
+    autoDeploy: true
